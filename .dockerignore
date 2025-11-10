@@ -1,0 +1,31 @@
+# Exclude large data files from Docker image
+uk_address_matcher/data/*.parquet
+uk_address_matcher/data/cleaned_data/
+
+# Exclude test data
+tests/test_data/
+example_data/
+
+# Exclude development files
+*.ipynb
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+.gitignore
+
+# Exclude local scripts
+glaam_wf.py
+glaam_wf_docker.py
+robin_*.ipynb
+examples/
+scripts/
+
+# Exclude documentation
+*.md
+docs/
+
+# But INCLUDE the small config files
+!uk_address_matcher/data/splink_model.json
+!uk_address_matcher/data/common_end_tokens.csv

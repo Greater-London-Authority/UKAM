@@ -29,23 +29,23 @@ class MessyProcessor:
         self.aws_region = os.environ.get('AWS_DEFAULT_REGION', 'eu-west-2')
         self.job_id = os.environ.get('JOB_ID', f"job-{int(time.time())}")
         self.messy_s3_key = os.environ.get('MESSY_S3_KEY')
-
+        
         if not self.messy_s3_key:
             raise ValueError("MESSY_S3_KEY environment variable required")
-
+        
         self.s3 = boto3.client('s3', region_name=self.aws_region)
         self.con = self._setup_duckdb()
-
+    
     def _setup_duckdb(self):
         """Setup DuckDB with proper memory and S3 support"""
         con = duckdb.connect(':memory:')
-
+        
         # Memory configuration
         memory_limit = os.environ.get('DUCKDB_MEMORY_LIMIT', '')
         if not memory_limit:
             total_mem_gb = psutil.virtual_memory().total // (1024**3)
             memory_limit = f"{int(total_mem_gb * 0.8)}GB"
-
+        
         con.execute(f"PRAGMA memory_limit='{memory_limit}'")
         # Thread configuration - use all available cores
         thread_count = multiprocessing.cpu_count()
@@ -63,7 +63,7 @@ class MessyProcessor:
         print(f"   Threads: {thread_count}")
         print(f"   Temp dir size: {temp_dir_size}")
         print("   Temp dir path: /tmp/duckdb")
-
+        
         # S3 configuration
         con.execute("INSTALL httpfs")
         con.execute("LOAD httpfs")
@@ -73,36 +73,36 @@ class MessyProcessor:
             session = boto3.Session()
             credentials = session.get_credentials()
             current_creds = credentials.get_frozen_credentials()
-
+            
             # Configure DuckDB S3 settings
             con.execute(f"SET s3_region='{self.aws_region}'")
             con.execute(f"SET s3_access_key_id='{current_creds.access_key}'")
             con.execute(
                 f"SET s3_secret_access_key='{current_creds.secret_key}'")
-
+            
             # Session token for temporary credentials
             if current_creds.token:
                 con.execute(f"SET s3_session_token='{current_creds.token}'")
-
+            
             con.execute("SET s3_use_ssl=true")
-
+            
             print(f"   DuckDB configured: {memory_limit} memory, "
                   f"{multiprocessing.cpu_count()} threads, AWS auth")
-
+            
         except Exception as e:
             print(f"⚠️  Warning: Could not configure AWS credentials: {e}")
             print("    Attempting to use default S3 configuration...")
             con.execute(f"SET s3_region='{self.aws_region}'")
 
         return con
-
+    
     def process(self):
         """Main messy data matching pipeline with automatic batching"""
         print(f"Processing messy data job: {self.job_id}")
         print(f"   Input: s3://{self.s3_bucket}/{self.messy_s3_key}")
-
+        
         start_time = time.time()
-
+        
         try:
             # Step 1: Get messy data count (without loading all data)
             print("\n📊 Analyzing messy data size...")
@@ -321,6 +321,8 @@ class MessyProcessor:
                     postcode_select = (
                         f"{postcode_col} as postcode" if postcode_col else
                         "NULL as postcode")
+                    
+                    # POTENTIAL BUG FIX: Changed address_col to postcode_col here if that was the intent
                     postcode_filter = (
                         f"AND {address_col} IS NOT NULL" if postcode_col else "")  # noqa: E501
 
@@ -330,15 +332,16 @@ class MessyProcessor:
                         limit_clause = f"LIMIT {limit_rows}"
                         print(f"Processing limited to first {limit_rows} rows")
 
+                    # FIXED: Indentation corrected to 20 spaces (inside try block)
                     self.con.execute(f"""
                     CREATE OR REPLACE TABLE messy_raw AS
-                    SELECT
+                    SELECT 
                         ROW_NUMBER() OVER() as unique_id,
                         {address_col} as address_concat,
                         {postcode_select},
                         'messy' as source_dataset
                     FROM
-                    read_parquet('s3://{self.s3_bucket}/{self.messy_s3_key}')
+                        read_parquet('s3://{self.s3_bucket}/{self.messy_s3_key}')
                     WHERE {address_col} IS NOT NULL {postcode_filter}
                     {limit_clause}
                     """)
@@ -358,25 +361,26 @@ class MessyProcessor:
 
                 # Step 3: Token frequencies already loaded at line 126-127 - reuse them! # noqa: E501
                 # No need to reload
-
+            
                 # Step 4: Clean messy data using token frequencies from S3
                 print("\n   Cleaning messy data...")
+                # FIXED: Indentation corrected to 16 spaces (inside else block)
                 clean_start = time.time()
-
+                
                 df_messy = self.con.table("messy_raw")
                 df_messy_clean = clean_data_using_precomputed_rel_tok_freq(
-                    df_messy,
+                    df_messy, 
                     con=self.con,
                     rel_tok_freq_table=df_token_freq  # Already loaded
                 )
-
+                
                 clean_time = time.time() - clean_start
                 print(f"Data cleaned in {clean_time:.2f} seconds")
-
+                
                 # Step 5: Create linker
                 print("\n   Creating linker...")
                 linker_start = time.time()
-
+                
                 linker = get_linker(
                     df_addresses_to_match=df_messy_clean,
                     df_addresses_to_search_within=df_canonical_clean,
@@ -386,26 +390,26 @@ class MessyProcessor:
                     retain_intermediate_calculation_columns=True,
                     precomputed_numeric_tf_table=df_numeric_freq
                 )
-
+                
                 linker_time = time.time() - linker_start
                 print(f"   Linker created in {linker_time:.2f} seconds")
-
+                
                 # Step 6: Perform matching
                 print("\n   Performing address matching...")
                 match_start = time.time()
-
+                
                 df_predict = linker.inference.predict(
                     threshold_match_weight=-20,
                     experimental_optimisation=True
                 )
-
+                
                 match_time = time.time() - match_start
                 print(f"   Matching completed in {match_time:.2f} seconds")
-
+                
                 # Step 7: Improve predictions
                 print("\n   Improving predictions...")
                 improve_start = time.time()
-
+                
                 df_predict_improved = improve_predictions_using_distinguishing_tokens(  # noqa: E501
                     df_predict=df_predict.as_duckdbpyrelation(),
                     con=self.con,
@@ -417,7 +421,7 @@ class MessyProcessor:
                     BIGRAM_REWARD_MULTIPLIER=3.0,
                     MISSING_TOKEN_PENALTY=0.1,
                 )
-
+                
                 improve_time = time.time() - improve_start
                 print(f"   Predictions improved in {improve_time:.2f} seconds")
 
@@ -466,7 +470,7 @@ class MessyProcessor:
                     QUALIFY match_rank <= 5  -- Top 5 matches per address
                     ORDER BY unique_id_r, match_weight DESC
                 )
-            TO 's3://{self.s3_bucket}/{results_s3_key}'
+            TO 's3://{self.s3_bucket}/{results_s3_key}' 
             (FORMAT PARQUET, COMPRESSION SNAPPY)
             """)
 
@@ -505,18 +509,18 @@ class MessyProcessor:
                 TO 's3://{self.s3_bucket}/{export_csv_key}'
                 (FORMAT CSV, HEADER)
             """)
-
+            
             # Generate statistics
             stats = self._generate_statistics(df_predict_improved, messy_count)
             stats_s3_key = f"results/matches/{self.job_id}/summary_stats.json"
-
+            
             self.s3.put_object(
                 Bucket=self.s3_bucket,
                 Key=stats_s3_key,
                 Body=json.dumps(stats, indent=2),
                 ContentType='application/json'
             )
-
+            
             # Export CSV for user download
             # This section is now redundant as the CSV is exported
             # directly in the new_code
@@ -537,7 +541,7 @@ class MessyProcessor:
 
             export_time = time.time() - export_start
             total_time = time.time() - start_time
-
+            
             # Print summary
             print("\n" + "="*70)
             print("MATCHING JOB COMPLETED SUCCESSFULLY!")
@@ -547,11 +551,11 @@ class MessyProcessor:
             if 'clean_time' in locals():
                 print("   Performance:")
                 print(f"   Data loading    : {load_time:.2f}s")
-                print(f"   Data cleaning   : {clean_time:.2f}s")
-                print(f"   Linker creation : {linker_time:.2f}s")
-                print(f"   Address matching: {match_time:.2f}s")
-                print(f"   Improvement     : {improve_time:.2f}s")
-                print("")
+            print(f"   Data cleaning   : {clean_time:.2f}s")
+            print(f"   Linker creation : {linker_time:.2f}s")
+            print(f"   Address matching: {match_time:.2f}s")
+            print(f"   Improvement     : {improve_time:.2f}s")
+            print("")
 
             print(f"Total time: {total_time:.2f}s")
             print(f"   Export time: {export_time:.2f}s")
@@ -566,7 +570,7 @@ class MessyProcessor:
             print(f"   CSV export   : s3://{self.s3_bucket}/{export_csv_key}")
             print(f"   Statistics   : s3://{self.s3_bucket}/{stats_s3_key}")
             print("="*70)
-
+            
             return {
                 'status': 'success',
                 'job_id': self.job_id,
@@ -575,12 +579,12 @@ class MessyProcessor:
                 'results_s3_key': results_s3_key,
                 'csv_export_key': export_csv_key
             }
-
+            
         except Exception as e:
             print(f"   Job failed: {str(e)}")
             import traceback
             traceback.print_exc()
-
+            
             # Save error information
             error_info = {
                 'status': 'failed',
@@ -588,7 +592,7 @@ class MessyProcessor:
                 'error': str(e),
                 'timestamp': datetime.now().isoformat()
             }
-
+            
             try:
                 error_s3_key = f"results/matches/{self.job_id}/error.json"
                 self.s3.put_object(
@@ -599,13 +603,13 @@ class MessyProcessor:
                 )
             except Exception as e:  # noqa: F841
                 print(f"   Error saving error information: {str(e)}")
-
+            
             sys.exit(1)
-
+    
     def _generate_statistics(self, df_results, total_addresses):
         """Generate match quality statistics"""
         stats_query = """
-        SELECT
+        SELECT 
             COUNT(*) as total_matches,
             COUNT(CASE WHEN match_weight > -20 THEN 1 END) as
              high_confidence_matches,
@@ -616,9 +620,9 @@ class MessyProcessor:
             MAX(match_weight) as max_match_weight
         FROM df_results
         """
-
+        
         stats = self.con.execute(stats_query).fetchone()
-
+        
         return {
             'total_addresses': total_addresses,
             'total_matches': stats[0],

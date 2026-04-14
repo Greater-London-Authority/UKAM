@@ -1,4 +1,4 @@
-from duckdb import DuckDBPyRelation, DuckDBPyConnection
+from duckdb import DuckDBPyConnection, DuckDBPyRelation
 
 
 def improve_predictions_using_distinguishing_tokens(
@@ -28,11 +28,15 @@ def improve_predictions_using_distinguishing_tokens(
     Returns:
         DuckDBPyRelation: Table with improved match predictions
     """
+    _distinguishing_token_matches_table = "__ukam__distinguishability_matches"
 
     add_cols_select = ""
     if additional_columns_to_retain:
         for col in additional_columns_to_retain:
             add_cols_select += f"{col}_l, {col}_r, "
+
+    if "ukam_label_r" in df_predict.columns:
+        add_cols_select += "ukam_label_r, "
 
     # Split the large SQL query into separate CTE steps
 
@@ -41,8 +45,12 @@ def improve_predictions_using_distinguishing_tokens(
     SELECT *
     FROM df_predict
     WHERE match_weight > {match_weight_threshold}
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY unique_id_r, unique_id_l
+        ORDER BY match_weight DESC, ukam_address_id_r DESC, ukam_address_id_l DESC
+    ) = 1
     """
-    good_matches = con.sql(sql_good_matches)
+    good_matches = con.sql(sql_good_matches)  # noqa: F841
 
     # Step 2: Create top_n_matches CTE
     sql_top_n_matches = f"""
@@ -56,62 +64,95 @@ def improve_predictions_using_distinguishing_tokens(
     top_n_matches = con.sql(sql_top_n_matches)
 
     # Step 3: Create remove_common_end_tokens CTE
+    # TODO(ThomasHepworth): Refine this code when we have time.
     sql_remove_common_end_tokens = """
+    WITH intermediate AS (
+        SELECT
+            *,
+            map_keys(common_end_tokens_hist_r) AS common_end_tokens_r
+        FROM top_n_matches
+    ),
+    -- If we have a column of NULL values, common_end_tokens_hist can often be of the
+    -- wrong type and will cause errors.
+    enriched AS (
+        SELECT
+            *,
+            COALESCE(
+                common_end_tokens_r.list_transform(
+                    x -> COALESCE(
+                        struct_extract(
+                            TRY_CAST(x AS STRUCT(tok VARCHAR, rel_freq DOUBLE)),
+                            'tok'
+                        ),
+                        TRY_CAST(x AS VARCHAR)
+                    )
+                ),
+                CAST([] AS VARCHAR[])
+            ) AS common_end_tokens_tok
+        FROM intermediate
+    )
     SELECT
-        * EXCLUDE (original_address_concat_r, original_address_concat_l),
-        map_keys(common_end_tokens_hist_r) as common_end_tokens_r,
-
-        original_address_concat_l
+        *,
+        clean_full_address_l
             .trim()
             .upper()
             .regexp_split_to_array('\\s+')
             .list_reverse()
-            .list_filter((tok, i) -> not (i = 1 and list_contains(common_end_tokens_r.list_transform(x -> x.tok), tok)))
-            .list_filter((tok, i) -> not (i = 1 and list_contains(common_end_tokens_r.list_transform(x -> x.tok), tok)))
+            .list_filter((tok, i) -> not (
+                i = 1 and common_end_tokens_tok.list_contains(tok)
+            ))
+            .list_filter((tok, i) -> not (
+                i = 1 and common_end_tokens_tok.list_contains(tok)
+            ))
             .list_reverse()
             .array_to_string(' ')
-            as original_address_concat_l,
+            AS __token_address_l,
 
-        original_address_concat_r
+        clean_full_address_r
             .trim()
             .upper()
             .regexp_split_to_array('\\s+')
             .list_reverse()
-            .list_filter((tok, i) -> not (i = 1 and list_contains(common_end_tokens_r.list_transform(x -> x.tok), tok)))
-            .list_filter((tok, i) -> not (i = 1 and list_contains(common_end_tokens_r.list_transform(x -> x.tok), tok)))
+            .list_filter((tok, i) -> not (
+                i = 1 and common_end_tokens_tok.list_contains(tok)
+            ))
+            .list_filter((tok, i) -> not (
+                i = 1 and common_end_tokens_tok.list_contains(tok)
+            ))
             .list_reverse()
             .array_to_string(' ')
-            as original_address_concat_r
+                AS __token_address_r
 
-    FROM top_n_matches
-    """
-    remove_common_end_tokens = con.sql(sql_remove_common_end_tokens)
+    FROM enriched
+
+            """
+    remove_common_end_tokens = con.sql(sql_remove_common_end_tokens)  # noqa: F841
 
     # Step 4: Create tokenise_r CTE
     sql_tokenise_r = """
     SELECT DISTINCT
-        unique_id_r,
+        ukam_address_id_r,
 
-        concat_ws(' ', original_address_concat_r, postcode_r)
+        concat_ws(' ', __token_address_r, postcode_r)
             .trim()
             .upper()
             .regexp_split_to_array('\\s+')
             as tokens_r
     FROM remove_common_end_tokens
     """
-    tokenise_r = con.sql(sql_tokenise_r)
+    tokenise_r = con.sql(sql_tokenise_r)  # noqa: F841
 
     # Step 5: Create tokens CTE
     sql_tokens = f"""
     SELECT
-        t.unique_id_r,
+        t.ukam_address_id_r,
         t.tokens_r,
 
         -----------------
         -- TOKENS SECTION
         -----------------
 
-        concat_ws(' ', original_address_concat_l, postcode_l)
+        concat_ws(' ', __token_address_l, postcode_l)
                 .trim()
                 .upper()
                 .regexp_split_to_array('\\s+')
@@ -169,27 +210,31 @@ def improve_predictions_using_distinguishing_tokens(
         else ""
     }
 
-    FROM top_n_matches m
-    JOIN tokenise_r t USING (unique_id_r)
-    GROUP BY t.unique_id_r, t.tokens_r
+    FROM remove_common_end_tokens m
+    JOIN tokenise_r t USING (ukam_address_id_r)
+    GROUP BY t.ukam_address_id_r, t.tokens_r
     """
-    tokens = con.sql(sql_tokens)
+    tokens = con.sql(sql_tokens)  # noqa: F841
 
     # Step 6: Create intermediate CTE
     sql_intermediate = f"""
     SELECT
         match_weight,
         match_probability,
+        -- Raw unique IDs
         unique_id_l,
         m.unique_id_r,
         original_address_concat_l,
         original_address_concat_r,
+        -- unique IDs generated by ukam cleaning process
+        ukam_address_id_l,
+        ukam_address_id_r,
 
         -----------------
         -- TOKENS SECTION
         -----------------
 
-        concat_ws(' ', original_address_concat_l, postcode_l)
+        concat_ws(' ', __token_address_l, postcode_l)
             .trim()
             .upper()
             .regexp_split_to_array('\\s+')
@@ -266,10 +311,10 @@ def improve_predictions_using_distinguishing_tokens(
         postcode_l,
         postcode_r,
         {add_cols_select}
-    FROM top_n_matches m
-    LEFT JOIN tokens t USING (unique_id_r)
+    FROM remove_common_end_tokens m
+    LEFT JOIN tokens t USING (ukam_address_id_r)
     """
-    intermediate = con.sql(sql_intermediate)
+    intermediate = con.sql(sql_intermediate)  # noqa: F841
 
     # Step 7: Final query
     sql_final = f"""
@@ -302,6 +347,8 @@ def improve_predictions_using_distinguishing_tokens(
         postcode_l,
         original_address_concat_r,
         postcode_r,
+        ukam_address_id_l,
+        ukam_address_id_r,
 
         -----------------
         -- TOKENS SECTION
@@ -366,19 +413,21 @@ def improve_predictions_using_distinguishing_tokens(
     {add_cols_select}
 
     FROM intermediate
-    ORDER BY unique_id_r
+    ORDER BY ukam_address_id_r
     """
 
-    windowed_tokens = con.sql(sql_final)
+    windowed_tokens = con.sql(sql_final)  # noqa: F841
 
     # Calculate new match weights based on distinguishing tokens and bigrams
 
     sql = f"""
-    CREATE OR REPLACE TABLE matches AS
+    CREATE OR REPLACE TABLE {_distinguishing_token_matches_table} AS
 
     SELECT
-        unique_id_r,
         unique_id_l,
+        unique_id_r,
+        ukam_address_id_r,
+        ukam_address_id_l,
 
         -- Token-based adjustments
         ifnull(map_values(overlapping_tokens_this_l_and_r)
@@ -439,5 +488,5 @@ def improve_predictions_using_distinguishing_tokens(
     """
 
     con.execute(sql)
-    matches = con.table("matches")
+    matches = con.table(_distinguishing_token_matches_table)
     return matches

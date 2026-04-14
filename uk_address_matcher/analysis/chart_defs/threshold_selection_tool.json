@@ -1,0 +1,68 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "description": "Threshold selection chart from labelled top-1 outputs",
+  "title": "Threshold Selection Chart",
+  "width": 540,
+  "height": 360,
+  "data": {
+    "values": []
+  },
+  "transform": [
+    {
+      "fold": ["precision", "recall"],
+      "as": ["metric", "metric_value"]
+    },
+    {
+      "filter": "datum.truth_threshold >= -20 && datum.truth_threshold <= 50"
+    }
+  ],
+  "mark": {
+    "type": "line",
+    "point": true
+  },
+  "encoding": {
+    "x": {
+      "field": "truth_threshold",
+      "type": "quantitative",
+      "title": "Match weight threshold"
+    },
+    "y": {
+      "field": "metric_value",
+      "type": "quantitative",
+      "title": "Metric value",
+      "scale": {
+        "domain": [0, 1]
+      }
+    },
+    "color": {
+      "field": "metric",
+      "type": "nominal",
+      "title": "Metric"
+    },
+    "tooltip": [
+      {
+        "field": "metric",
+        "type": "nominal",
+        "title": "Metric"
+      },
+      {
+        "field": "metric_value",
+        "type": "quantitative",
+        "title": "Value",
+        "format": ".4f"
+      },
+      {
+        "field": "truth_threshold",
+        "type": "quantitative",
+        "title": "Match weight threshold",
+        "format": ".2f"
+      },
+      {
+        "field": "match_probability",
+        "type": "quantitative",
+        "title": "Match probability",
+        "format": ".4f"
+      }
+    ]
+  }
+}

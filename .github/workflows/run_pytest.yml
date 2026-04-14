@@ -2,40 +2,46 @@ name: Run pytest
 
 on:
   pull_request:
-    branches: [ main ]
     paths:
-      - 'uk_address_matcher/**'
-      - 'tests/**'
+      - "uk_address_matcher/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - 'uk_address_matcher/**'
-      - 'tests/**'
+      - "uk_address_matcher/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   run-pytest:
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.10"
 
-    - name: Setup uv
-      id: setup-uv
-      uses: astral-sh/setup-uv@v5
-      with:
-        enable-cache: true
-        cache-dependency-glob: "uv.lock"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+        with:
+          version: "0.11.3"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
-    - name: Install uv
-      uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: uv sync --all-extras --dev
 
-    - name: Install the project
-      run: uv sync --all-extras --dev
+      - name: Install project in editable mode
+        run: uv pip install -e .
 
-    - name: Run pytest
-      run: uv run pytest
+      - name: Run pytest
+        run: uv run pytest tests/ -vv

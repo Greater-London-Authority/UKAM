@@ -174,3 +174,10 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+.DS_Store
+
+# Project specific folders to preclude from git history
+benchmarking/.config.json
+ukam_prepared_canonical/*
+tmp/*
+benchmarking/results/*

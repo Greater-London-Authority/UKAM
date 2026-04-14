@@ -1,0 +1,439 @@
+import json
+import tempfile
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import duckdb
+import pyarrow
+import pytest
+
+from uk_address_matcher import prepare_canonical_folder
+from uk_address_matcher.prepare_canonical import (
+    MAX_CHUNK_COUNT,
+    _PreparedCanonical,
+    load_prepared_canonical_data,
+)
+
+CANONICAL_RECORDS = [
+    {
+        "unique_id": "C1",
+        "address_concat": "1 high street london",
+        "postcode": "SW1A 1AA",
+    },
+    {
+        "unique_id": "C2",
+        "address_concat": "2 low street manchester",
+        "postcode": "M1 1AA",
+    },
+    {
+        "unique_id": "C3",
+        "address_concat": "3 middle road birmingham",
+        "postcode": "B1 1AA",
+    },
+]
+
+
+@pytest.fixture
+def con():
+    return duckdb.connect(database=":memory:")
+
+
+@pytest.fixture
+def canonical_data(con):
+    return con.from_arrow(pyarrow.Table.from_pylist(CANONICAL_RECORDS))
+
+
+@pytest.fixture
+def prepared_folder(con, canonical_data, tmp_path):
+    """A ready-made prepared folder for tests that only need to read."""
+    prepare_canonical_folder(
+        canonical_data, output_folder=tmp_path, con=con, overwrite=True
+    )
+    return tmp_path
+
+
+def test_prepare_creates_expected_files(prepared_folder):
+    assert (prepared_folder / "ukam_canonical_addresses.parquet").exists()
+    assert (prepared_folder / "ukam_term_frequencies.parquet").exists()
+    assert (prepared_folder / "ukam_inverted_index.parquet").exists()
+    assert (prepared_folder / "ukam_manifest.json").exists()
+
+
+def test_prepare_can_create_chunked_canonical_output(con, canonical_data, tmp_path):
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=tmp_path,
+        con=con,
+        output_chunk_count=3,
+        overwrite=True,
+    )
+
+    chunk_dir = tmp_path / "ukam_canonical_addresses_chunks"
+    chunk_files = sorted(chunk_dir.glob("*.parquet"))
+
+    assert chunk_dir.exists()
+    assert len(chunk_files) == 3
+    assert chunk_files[0].name == "canonical_addresses_chunk_00001_of_00003.parquet"
+    assert chunk_files[1].name == "canonical_addresses_chunk_00002_of_00003.parquet"
+    assert chunk_files[2].name == "canonical_addresses_chunk_00003_of_00003.parquet"
+    assert not (tmp_path / "ukam_canonical_addresses.parquet").exists()
+
+
+@pytest.mark.parametrize("invalid_chunk_count", [0, -1, -10])
+def test_prepare_rejects_non_positive_output_chunk_count(
+    con, canonical_data, tmp_path, invalid_chunk_count
+):
+    with pytest.raises(ValueError, match="output_chunk_count must be at least 1"):
+        prepare_canonical_folder(
+            canonical_data,
+            output_folder=tmp_path,
+            con=con,
+            output_chunk_count=invalid_chunk_count,
+            overwrite=True,
+        )
+
+
+def test_prepare_rejects_output_chunk_count_above_supported_digits(
+    con, canonical_data, tmp_path
+):
+    with pytest.raises(ValueError, match="output_chunk_count must be at most"):
+        prepare_canonical_folder(
+            canonical_data,
+            output_folder=tmp_path,
+            con=con,
+            output_chunk_count=MAX_CHUNK_COUNT + 1,
+            overwrite=True,
+        )
+
+
+@pytest.mark.parametrize("invalid_chunk_count", [0, -1, -10])
+def test_prepare_rejects_non_positive_num_of_chunks(
+    con, canonical_data, tmp_path, invalid_chunk_count
+):
+    with pytest.raises(ValueError, match="num_of_chunks must be at least 1"):
+        prepare_canonical_folder(
+            canonical_data,
+            output_folder=tmp_path,
+            con=con,
+            num_of_chunks=invalid_chunk_count,
+            overwrite=True,
+        )
+
+
+def test_prepare_rejects_num_of_chunks_above_supported_digits(
+    con, canonical_data, tmp_path
+):
+    with pytest.raises(ValueError, match="num_of_chunks must be at most"):
+        prepare_canonical_folder(
+            canonical_data,
+            output_folder=tmp_path,
+            con=con,
+            num_of_chunks=MAX_CHUNK_COUNT + 1,
+            overwrite=True,
+        )
+
+
+def test_prepare_overwrite_false_raises(con, canonical_data):
+    with tempfile.TemporaryDirectory() as tmp:
+        prepare_canonical_folder(
+            canonical_data, output_folder=tmp, con=con, overwrite=True
+        )
+        with pytest.raises(FileExistsError):
+            prepare_canonical_folder(
+                canonical_data, output_folder=tmp, con=con, overwrite=False
+            )
+
+
+def test_prepare_overwrite_true_succeeds(con, canonical_data):
+    with tempfile.TemporaryDirectory() as tmp:
+        prepare_canonical_folder(
+            canonical_data, output_folder=tmp, con=con, overwrite=True
+        )
+        # Should not raise on second write
+        prepare_canonical_folder(
+            canonical_data, output_folder=tmp, con=con, overwrite=True
+        )
+
+
+def test_overwrite_clears_stale_files(con, canonical_data):
+    """overwrite=True should remove temp files left by a previous interrupted run."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prepare_canonical_folder(
+            canonical_data, output_folder=tmp, con=con, overwrite=True
+        )
+
+        stale = Path(tmp) / "ukam_manifest.json.tmp"
+        stale.write_text("stale")
+        assert stale.exists()
+
+        stale_chunk_dir = Path(tmp) / "ukam_canonical_addresses_chunks"
+        stale_chunk_dir.mkdir(parents=True, exist_ok=True)
+        (stale_chunk_dir / "old_chunk.parquet").write_text("stale")
+
+        prepare_canonical_folder(
+            canonical_data, output_folder=tmp, con=con, overwrite=True
+        )
+
+        assert not stale.exists()
+        assert not stale_chunk_dir.exists()
+        assert (Path(tmp) / "ukam_manifest.json").exists()
+        assert (Path(tmp) / "ukam_canonical_addresses.parquet").exists()
+
+
+def test_manifest_contains_expected_fields(prepared_folder):
+    manifest = json.loads((prepared_folder / "ukam_manifest.json").read_text())
+
+    assert "ukam_version" in manifest
+    assert "created_at" in manifest
+    assert "created_with_duckdb_version" in manifest
+    assert manifest["row_counts"]["canonical_addresses"] == 3
+    assert manifest["row_counts"]["canonical_output_chunks"] == 1
+
+    # Per-file metadata
+    assert "files" in manifest
+    addr_meta = manifest["files"]["ukam_canonical_addresses.parquet"]
+    assert "size_bytes" in addr_meta
+    assert "sha256" in addr_meta
+    assert "columns" in addr_meta
+    assert isinstance(addr_meta["columns"], list)
+    assert len(addr_meta["columns"]) > 0
+
+
+def test_manifest_version_mismatch_warns(con, prepared_folder):
+    manifest_path = prepared_folder / "ukam_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["ukam_version"] = "0.0.0"
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.warns(UserWarning, match="v0.0.0"):
+        load_prepared_canonical_data(prepared_folder, con=con)
+
+
+def test_missing_manifest_warns(con, prepared_folder):
+    """Loading from a folder with no manifest should warn."""
+    (prepared_folder / "ukam_manifest.json").unlink()
+
+    with pytest.warns(UserWarning, match="No manifest file found"):
+        load_prepared_canonical_data(prepared_folder, con=con)
+
+
+def test_file_size_mismatch_warns(con, prepared_folder):
+    """A recorded size that doesn't match the actual file should warn."""
+    manifest_path = prepared_folder / "ukam_manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["files"]["ukam_canonical_addresses.parquet"]["size_bytes"] = 1
+    manifest_path.write_text(json.dumps(manifest))
+
+    with pytest.warns(UserWarning, match="size.*bytes"):
+        load_prepared_canonical_data(prepared_folder, con=con)
+
+
+def test_load_returns_prepared_canonical(con, prepared_folder):
+    result = load_prepared_canonical_data(prepared_folder, con=con)
+
+    assert isinstance(result, _PreparedCanonical)
+    assert isinstance(result.addresses, duckdb.DuckDBPyRelation)
+    assert isinstance(result.term_frequencies, duckdb.DuckDBPyRelation)
+    assert isinstance(result.inverted_index, duckdb.DuckDBPyRelation)
+
+
+def test_load_prepared_data_has_expected_row_counts(con, prepared_folder):
+    result = load_prepared_canonical_data(prepared_folder, con=con)
+
+    assert result.addresses.count("*").fetchone()[0] == 3
+    assert result.term_frequencies.count("*").fetchone()[0] > 0
+    assert result.inverted_index.count("*").fetchone()[0] > 0
+
+
+def test_chunked_canonical_manifest_row_audit(con, canonical_data, tmp_path):
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=tmp_path,
+        con=con,
+        output_chunk_count=3,
+        overwrite=True,
+    )
+
+    manifest = json.loads((tmp_path / "ukam_manifest.json").read_text())
+    chunk_files = sorted((tmp_path / "ukam_canonical_addresses_chunks").glob("*.parquet"))
+
+    total_rows_across_chunks = sum(
+        con.read_parquet(str(chunk_path)).count("*").fetchone()[0]
+        for chunk_path in chunk_files
+    )
+
+    assert manifest["row_counts"]["canonical_addresses"] == 3
+    assert manifest["row_counts"]["canonical_output_chunks"] == 3
+    assert total_rows_across_chunks == manifest["row_counts"]["canonical_addresses"]
+
+
+def test_load_reads_chunked_canonical_layout(con, canonical_data, tmp_path):
+    prepare_canonical_folder(
+        canonical_data,
+        output_folder=tmp_path,
+        con=con,
+        output_chunk_count=4,
+        overwrite=True,
+    )
+
+    result = load_prepared_canonical_data(tmp_path, con=con)
+
+    assert isinstance(result, _PreparedCanonical)
+    assert result.addresses.count("*").fetchone()[0] == 3
+
+
+def test_load_accepts_string_path(con, prepared_folder):
+    result = load_prepared_canonical_data(str(prepared_folder), con=con)
+    assert result.addresses.count("*").fetchone()[0] == 3
+
+
+def test_invalid_folder_raises(con):
+    with pytest.raises(FileNotFoundError):
+        load_prepared_canonical_data("/tmp/nonexistent_folder_xyz_123", con=con)
+
+
+def test_corrupt_parquet_raises(con, prepared_folder):
+    """A corrupt Parquet file should be caught during validation."""
+    corrupt_path = prepared_folder / "ukam_canonical_addresses.parquet"
+    corrupt_path.write_bytes(b"not a parquet file")
+
+    with pytest.raises(FileNotFoundError, match="not a valid Parquet file"):
+        load_prepared_canonical_data(prepared_folder, con=con)
+
+
+def test_load_remote_folder_reads_chunked_layout_and_applies_filter():
+    folder_uri = "s3://test-bucket/prepared"
+
+    addresses_rel = MagicMock()
+    filtered_addresses_rel = MagicMock()
+    addresses_rel.limit.return_value = addresses_rel
+    addresses_rel.fetchone.return_value = (1,)
+    addresses_rel.filter.return_value = filtered_addresses_rel
+
+    tf_rel = MagicMock()
+    tf_rel.limit.return_value = tf_rel
+    tf_rel.fetchone.return_value = (1,)
+
+    idx_rel = MagicMock()
+    idx_rel.limit.return_value = idx_rel
+    idx_rel.fetchone.return_value = (1,)
+
+    con = MagicMock()
+
+    def _read_parquet_side_effect(path):
+        if path == f"{folder_uri}/ukam_term_frequencies.parquet":
+            return tf_rel
+        if path == f"{folder_uri}/ukam_inverted_index.parquet":
+            return idx_rel
+        if path == f"{folder_uri}/ukam_canonical_addresses_chunks/*.parquet":
+            return addresses_rel
+        raise AssertionError(f"Unexpected path: {path}")
+
+    con.read_parquet.side_effect = _read_parquet_side_effect
+
+    result = load_prepared_canonical_data(
+        folder_uri,
+        con=con,
+        canonical_address_filter="postcode = 'SW1A2AA'",
+    )
+
+    assert isinstance(result, _PreparedCanonical)
+    assert result.addresses is filtered_addresses_rel
+    assert result.term_frequencies is tf_rel
+    assert result.inverted_index is idx_rel
+    addresses_rel.filter.assert_called_once_with("postcode = 'SW1A2AA'")
+
+
+def test_load_remote_folder_reads_single_dataset_directory_layout():
+    folder_uri = "s3://test-bucket/prepared"
+
+    addresses_rel = MagicMock()
+    addresses_rel.limit.return_value = addresses_rel
+    addresses_rel.fetchone.return_value = (1,)
+
+    tf_rel = MagicMock()
+    tf_rel.limit.return_value = tf_rel
+    tf_rel.fetchone.return_value = (1,)
+
+    idx_rel = MagicMock()
+    idx_rel.limit.return_value = idx_rel
+    idx_rel.fetchone.return_value = (1,)
+
+    con = MagicMock()
+
+    def _read_parquet_side_effect(path):
+        if path == f"{folder_uri}/ukam_term_frequencies.parquet":
+            return tf_rel
+        if path == f"{folder_uri}/ukam_inverted_index.parquet":
+            return idx_rel
+        if path == f"{folder_uri}/ukam_canonical_addresses_chunks/*.parquet":
+            raise FileNotFoundError("No files found for chunk glob")
+        if path == f"{folder_uri}/ukam_canonical_addresses.parquet":
+            raise FileNotFoundError("Path is a directory-like prefix")
+        if path == f"{folder_uri}/ukam_canonical_addresses.parquet/*.parquet":
+            return addresses_rel
+        raise AssertionError(f"Unexpected path: {path}")
+
+    con.read_parquet.side_effect = _read_parquet_side_effect
+
+    result = load_prepared_canonical_data(folder_uri, con=con)
+
+    assert isinstance(result, _PreparedCanonical)
+    assert result.addresses is addresses_rel
+
+
+def test_load_remote_folder_rolls_back_and_falls_back_to_single_file():
+    folder_uri = "s3://test-bucket/prepared"
+
+    addresses_rel = MagicMock()
+    addresses_rel.limit.return_value = addresses_rel
+    addresses_rel.fetchone.return_value = (1,)
+
+    tf_rel = MagicMock()
+    tf_rel.limit.return_value = tf_rel
+    tf_rel.fetchone.return_value = (1,)
+
+    idx_rel = MagicMock()
+    idx_rel.limit.return_value = idx_rel
+    idx_rel.fetchone.return_value = (1,)
+
+    con = MagicMock()
+
+    def _read_parquet_side_effect(path):
+        if path == f"{folder_uri}/ukam_term_frequencies.parquet":
+            return tf_rel
+        if path == f"{folder_uri}/ukam_inverted_index.parquet":
+            return idx_rel
+        if path == f"{folder_uri}/ukam_canonical_addresses_chunks/*.parquet":
+            raise FileNotFoundError("No files found for chunk glob")
+        if path == f"{folder_uri}/ukam_canonical_addresses.parquet":
+            return addresses_rel
+        raise AssertionError(f"Unexpected path: {path}")
+
+    con.read_parquet.side_effect = _read_parquet_side_effect
+
+    result = load_prepared_canonical_data(folder_uri, con=con)
+
+    assert isinstance(result, _PreparedCanonical)
+    assert result.addresses is addresses_rel
+    con.execute.assert_any_call("ROLLBACK")
+
+
+def test_load_remote_folder_missing_required_files_raises_filenotfound():
+    folder_uri = "s3://test-bucket/prepared"
+
+    con = MagicMock()
+    con.read_parquet.side_effect = FileNotFoundError("No files found")
+
+    with pytest.raises(FileNotFoundError, match="missing required files"):
+        load_prepared_canonical_data(folder_uri, con=con)
+
+
+def test_load_remote_folder_permission_error_raises_permissionerror():
+    folder_uri = "s3://test-bucket/prepared"
+
+    con = MagicMock()
+    con.read_parquet.side_effect = RuntimeError("HTTP 403 Forbidden")
+
+    with pytest.raises(PermissionError, match="Cannot access prepared canonical data"):
+        load_prepared_canonical_data(folder_uri, con=con)

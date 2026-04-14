@@ -1,119 +1,95 @@
+<p align="center">
+<img src="https://raw.githubusercontent.com/moj-analytical-services/uk_address_matcher/4c9f0cab71225a8b370c594d7f5c300b7f7a72b0/docs/site/assets/images/uk_address_matcher_web_wide.png" alt="UK Address Matcher Logo" height="150px">
+</p>
+
+[![pypi](https://img.shields.io/github/v/release/moj-analytical-services/uk_address_matcher)](https://pypi.org/project/uk_address_matcher/#history)
+[![Documentation](https://img.shields.io/badge/API-documentation-blue)](https://moj-analytical-services.github.io/uk_address_matcher/)
+
 # High performance UK addresses matcher (geocoder)
 
-Extremely fast address matching using a pre-trained [Splink](https://github.com/moj-analytical-services/splink) model.
+Fast, simple address matching (geocoding) in Python.
 
-```
-Full time taken: 11.05 seconds
-to match 176,640 messy addresses to 273,832 canonical addresses
-at a rate of 15,008 addresses per second
+For full documentation, see our [main documentation site](https://moj-analytical-services.github.io/uk_address_matcher/).
 
-(On Macbook M4 Max)
-```
+## Why use this library
+
+- **Simple.** Setup in seconds, runs on a laptop. No separate infrastructure of services needed.
+- **Fast.** Match 100,000 addresses in ~30 seconds.
+- **Proven accuracy.** We use public, labelled datasets to measure and document accuracy.
+- **Support for Ordnance Survey data.**  We provide a automated build pipeline for users wishing to match to Ordnance Survey data.  Matching to any other canonical dataset is also supported.
+
+The end-to-end process of matching 100,000 addresses to Ordnance Survey data, including all software downloads and data processing takes:
+
+- Less than a minute if you are matching to a small area such as a local council region.
+- If matching to the whole UK, there's a one-time preprocessing step that takes around 10 minutes.  Subsequent matching of 100k records takes less than a minute.
 
 ## Installation
 
-At the moment this uses a branch of Splink only available on Github.
 ```bash
-pip install --pre uk_address_matcher
+pip install uk_address_matcher
 ```
 
-## Usage
+## What does it do?
 
-High performance address matching using a pre-trained [Splink](https://github.com/moj-analytical-services/splink) model.
+Given the following data:
 
-Assuming you have two duckdb dataframes in this format:
+-  a "messy" dataset of addresses that you want to match
+-  a "canonical" dataset of known addresses, often an Ordnance Survey dataset such as AddressBase or NGD.
 
-| unique_id | address_concat               | postcode  |
-|-----------|------------------------------|-----------|
-| 1         | 123 Fake Street, Faketown    | FA1 2KE   |
-| 2         | 456 Other Road, Otherville   | NO1 3WY   |
-| ...       | ...                          | ...       |
+this package will find the best matching canonical address for each messy address.
+
+## Example:
+
+Your address files need, at minimum, two columns: `unique_id` and `address_concat`.
+
+`postcode` is optional by recommended. If not provided an attempt is made to parse them out of `address_concat`
+
+Given the following data:
+
+### Messy data
+
+| unique_id | address_concat | postcode |
+|----------|----------------|----------|
+| m_1 | Flat A Example Court, 10 Demo Road, Townton | AB1 2BC |
+| ...more rows |
+
+### Canonical data
+
+| unique_id | address_concat | postcode |
+|----------|----------------|----------|
+| c_1 | Flat A, 10 Demo Road, Townton | AB1 2BC |
+| c_2 | Flat B, 10 Demo Road, Townton | AB1 2BC |
+| c_3 | Basement Flat, 10 Demo Road, Townton | AB1 2BC |
+| ...more rows |
 
 
-### Basic Matching
-
-Match them with:
+You can match it as follows:
 
 ```python
 import duckdb
+from uk_address_matcher import AddressMatcher
 
-from uk_address_matcher import (
-    clean_data_using_precomputed_rel_tok_freq,
-    get_linker,
-    best_matches_with_distinguishability,
-    improve_predictions_using_distinguishing_tokens,
-)
+con = duckdb.connect()
+messy = con.read_csv("example_data/messy_example.csv")
+canonical = con.read_csv("example_data/canonical_example.csv")
 
-p_ch = "./example_data/companies_house_addresess_postcode_overlap.parquet"
-p_fhrs = "./example_data/fhrs_addresses_sample.parquet"
-
-con = duckdb.connect(database=":memory:")
-
-df_ch = con.read_parquet(p_ch).order("postcode")
-df_fhrs = con.read_parquet(p_fhrs).order("postcode")
-
-df_ch_clean = clean_data_using_precomputed_rel_tok_freq(df_ch, con=con)
-df_fhrs_clean = clean_data_using_precomputed_rel_tok_freq(df_fhrs, con=con)
-
-linker = get_linker(
-    df_addresses_to_match=df_fhrs_clean,
-    df_addresses_to_search_within=df_ch_clean,
-    con=con,
-    include_full_postcode_block=True,
-    additional_columns_to_retain=["original_address_concat"],
-)
-
-# First pass - standard probabilistic linkage
-df_predict = linker.inference.predict(
-    threshold_match_weight=-50, experimental_optimisation=True
-)
-df_predict_ddb = df_predict.as_duckdbpyrelation()
-
-# Second pass - improve predictions using distinguishing tokens
-
-df_predict_improved = improve_predictions_using_distinguishing_tokens(
-    df_predict=df_predict_ddb,
-    con=con,
-    match_weight_threshold=-20,
-)
-
-# Find best matches within group and compute distinguishability
-
-best_matches = best_matches_with_distinguishability(
-    df_predict=df_predict_improved,
-    df_addresses_to_match=df_fhrs,
+matcher = AddressMatcher(
+    canonical_addresses=canonical,
+    addresses_to_match=messy,
     con=con,
 )
-
-best_matches
-
+result = matcher.match()
+result.matches().show(max_width=10000)
 ```
 
+Example output:
 
-### Two-Pass Matching Approach
-
-The package uses a two-pass approach to achieve high accuracy matching:
-
-1. **First Pass**: A standard probabilistic linkage model using Splink generates candidate matches for each input address.
-
-2. **Second Pass**: Within each candidate group, the model analyzes distinguishing tokens to refine matches:
-   - Identifies tokens that uniquely distinguish addresses within a candidate group
-   - Detects "punishment tokens" (tokens in the messy address that don't match the current candidate but do match other candidates)
-   - Uses this contextual information to improve match scores
-
-This approach is particularly effective when matching to a canonical (deduplicated) address list, as it can identify subtle differences between very similar addresses.
+| unique_id | resolved_canonical_id | original_address_concat | original_address_concat_canonical | match_reason | match_weight | distinguishability |
+|----------|------------------------|-------------------------|-----------------------------------|--------------|--------------|--------------------|
+| m_1 | c_2 | Flat A Example Court, 10 Demo Road, Townton | Flat A, 10 Demo Road, Townton | splink: probabilistic match | 13.5885 | 11.5033 |
 
 
 
-Refer to [the example](example_matching.py), which has detailed comments, for how to match your data.
-
-See [an example of comparing two addresses](example_compare_two.py) to get a sense of what it does/how it scores
-
-Run an interactive example in your browser:
-
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RobinL/uk_address_matcher/blob/main/match_example_data.ipynb)  Match 5,000 FHRS records to 21,952 companies house records in < 10 seconds.
-
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/RobinL/uk_address_matcher/blob/main/interactive_comparison.ipynb) Investigate and understand how the model works
 
 
 

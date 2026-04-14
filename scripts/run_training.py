@@ -4,13 +4,11 @@
 import os
 
 import duckdb
-
-
 from secret_data.secrets import epc_addresses_path
-from uk_address_matcher import clean_data_using_precomputed_rel_tok_freq
-from uk_address_matcher.linking_model.training import get_settings_for_training
+from splink import DuckDBAPI, Linker
 
-from splink import Linker, DuckDBAPI, block_on
+from uk_address_matcher import prepare_data_for_matching
+from uk_address_matcher.linking_model.training import get_settings_for_training
 
 LIMIT = 100000000
 
@@ -31,7 +29,7 @@ con.execute(sql)
 epc_addresses = con.table("epc_addresses")
 
 
-epc_addresses_clean = clean_data_using_precomputed_rel_tok_freq(epc_addresses, con=con)
+epc_addresses_clean = prepare_data_for_matching(epc_addresses, con=con)
 
 
 db_api = DuckDBAPI(connection=con)
@@ -52,11 +50,11 @@ if os.path.exists(model_path):
 m = linker.misc.save_model_to_json("uk_address_matcher/data/splink_model.json")
 
 # linker.training.estimate_u_using_random_sampling(
-#     max_pairs=1e8, experimental_optimisation=True
+#     max_pairs=1e8
 # )
 
 # linker.training.estimate_parameters_using_expectation_maximisation(
-#     block_on("postcode"), experimental_optimisation=True
+#     block_on("postcode")
 # )
 
 

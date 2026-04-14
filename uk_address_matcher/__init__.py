@@ -1,34 +1,37 @@
-__version__ = "1.0.0.dev19"
+__version__ = "1.1.0"
 
-from uk_address_matcher.linking_model.splink_model import get_linker
-from uk_address_matcher.cleaning.cleaning_pipelines import (
-    clean_data_on_the_fly,
-    clean_data_using_precomputed_rel_tok_freq,
-    get_numeric_term_frequencies_from_address_table,
-    get_address_token_frequencies_from_address_table,
-)
-from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
-    improve_predictions_using_distinguishing_tokens,
-)
+# === Primary API ===
+from uk_address_matcher.address_matcher import AddressMatcher
 
-from uk_address_matcher.post_linkage.analyse_results import (
-    best_matches_with_distinguishability,
-    best_matches_summary,
+# === Data preparation helpers ===
+from uk_address_matcher.cleaning.chunking_strategies import (
+    prepare_data_for_matching,
 )
-from uk_address_matcher.post_linkage.accuracy_from_labels import (
-    inspect_match_results_vs_labels,
-    evaluate_predictions_against_labels,
+from uk_address_matcher.datasets import ukam_datasets
+from uk_address_matcher.linking_model.address_record import AddressRecord
+
+# === Matching stages and runner ===
+from uk_address_matcher.linking_model.matching import (
+    ExactMatchStage,
+    PeeledAddressStage,
+    SplinkStage,
+    UniqueTrigramStage,
+)
+from uk_address_matcher.prepare_canonical import (
+    prepare_canonical_folder,
 )
 
 __all__ = [
-    "get_linker",
-    "clean_data_on_the_fly",
-    "clean_data_using_precomputed_rel_tok_freq",
-    "get_numeric_term_frequencies_from_address_table",
-    "get_address_token_frequencies_from_address_table",
-    "improve_predictions_using_distinguishing_tokens",
-    "best_matches_with_distinguishability",
-    "best_matches_summary",
-    "inspect_match_results_vs_labels",
-    "evaluate_predictions_against_labels",
+    # Primary API
+    "AddressMatcher",
+    "AddressRecord",
+    "prepare_canonical_folder",
+    # Data preparation helpers
+    "prepare_data_for_matching",
+    "ukam_datasets",
+    # Matching stages and runner
+    "ExactMatchStage",
+    "UniqueTrigramStage",
+    "PeeledAddressStage",
+    "SplinkStage",
 ]

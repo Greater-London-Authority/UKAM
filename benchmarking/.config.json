@@ -1,0 +1,8 @@
+{
+	"UKAM_ABERDEENSHIRE_DATA_PATH": "/path/to/local/aberdeenshire/",
+	"UKAM_LAMBETH_DATA_PATH": "/path/to/local/lambeth/",
+	"UKAM_HACKNEY_DATA_PATH": "/path/to/local/hackney/",
+	"UKAM_MID_SUSSEX_DATA_PATH": "/path/to/local/mid_sussex/",
+	"UKAM_OS_CANONICAL_PREPARED": "/path/to/local/os/ukam_prepared_canonical",
+	"UKAM_RHONDDA_DATA_PATH": "/path/to/local/rhondda"
+}

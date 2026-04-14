@@ -1,0 +1,233 @@
+[
+  { "token": "&", "replacement": "AND" },
+
+  { "token": "APT", "replacement": "APARTMENT" },
+  { "token": "APTS", "replacement": "APARTMENTS" },
+
+  { "token": "DUPX", "replacement": "DUPLEX" },
+
+  { "token": "FLT", "replacement": "FLAT" },
+  { "token": "FLATS", "replacement": "FLAT" },
+
+  { "token": "PENTHOUSE", "replacement": "PENTHOUSE" },
+
+  { "token": "RM", "replacement": "ROOM" },
+  { "token": "RMS", "replacement": "ROOMS" },
+
+  { "token": "UNITS", "replacement": "UNIT" },
+
+  { "token": "ACAD", "replacement": "ACADEMY" },
+  { "token": "ALLAY", "replacement": "ALLEY" },
+  { "token": "ALLEE", "replacement": "ALLEY" },
+  { "token": "ASSOC", "replacement": "ASSOCIATION" },
+
+  { "token": "AV", "replacement": "AVENUE" },
+  { "token": "AVE", "replacement": "AVENUE" },
+  { "token": "AVN", "replacement": "AVENUE" },
+
+  { "token": "BAS", "replacement": "BASEMENT" },
+  { "token": "BST", "replacement": "BASEMENT" },
+  { "token": "BSMT", "replacement": "BASEMENT" },
+
+  { "token": "BLDG", "replacement": "BUILDING" },
+  { "token": "BLGD", "replacement": "BUILDING" },
+  { "token": "BLK", "replacement": "BLOCK" },
+
+  { "token": "BLVD", "replacement": "BOULEVARD" },
+  { "token": "BVD", "replacement": "BOULEVARD" },
+
+  { "token": "BRDGE", "replacement": "BRIDGE" },
+  { "token": "BRG", "replacement": "BRIDGE" },
+
+  { "token": "BRK", "replacement": "BROOK" },
+
+  { "token": "BUNG", "replacement": "BUNGALOW" },
+
+  { "token": "CAUSWAY", "replacement": "CAUSEWAY" },
+
+  { "token": "CENTER", "replacement": "CENTRE" },
+  { "token": "CTR", "replacement": "CENTRE" },
+
+  { "token": "CHAM", "replacement": "CHAMBER" },
+  { "token": "CIN", "replacement": "CINEMA" },
+
+  { "token": "CLS", "replacement": "CLOSE" },
+
+  { "token": "CO", "replacement": "COMPANY" },
+  { "token": "CORP", "replacement": "CORPORATION" },
+  { "token": "CORR", "replacement": "CORRIDOR" },
+
+  { "token": "COTT", "replacement": "COTTAGE" },
+
+  { "token": "CR", "replacement": "CRESCENT" },
+  { "token": "CRES", "replacement": "CRESCENT" },
+
+  { "token": "CRT", "replacement": "COURT" },
+  { "token": "CT", "replacement": "COURT" },
+
+  { "token": "DEPT", "replacement": "DEPARTMENT" },
+
+  { "token": "DRIVE", "replacement": "DRIVE" },
+  { "token": "DR", "replacement": "DR" },
+
+  { "token": "ESPL", "replacement": "ESPLANADE" },
+
+  { "token": "FAC", "replacement": "FACTORY" },
+
+  { "token": "FF", "replacement": "FIRST FLOOR" },
+
+  { "token": "FL", "replacement": "FLOOR" },
+  { "token": "FLR", "replacement": "FLOOR" },
+  { "token": "FLRS", "replacement": "FLOORS" },
+  { "token": "FLS", "replacement": "FLOORS" },
+
+  { "token": "FLD", "replacement": "FIELD" },
+
+  { "token": "MAIS", "replacement": "MAISONETTE" },
+
+  { "token": "GALL", "replacement": "GALLERY" },
+
+  { "token": "GDN", "replacement": "GARDEN" },
+  { "token": "GDNS", "replacement": "GARDENS" },
+
+  { "token": "EXC", "replacement": "EXCLUDING" },
+  { "token": "EXCL", "replacement": "EXCLUDING" },
+  
+  { "token": "LGND", "replacement": "LOWER GROUND"},
+  { "token": "UGND", "replacement": "UPPER GROUND"},
+
+  { "token": "GRD", "replacement": "GROUND" },
+  { "token": "GND", "replacement": "GROUND" },
+
+  { "token": "FRST", "replacement": "FIRST" },
+  { "token": "1ST", "replacement": "FIRST" },
+  { "token": "SCD", "replacement": "SECOND" },
+  { "token": "2ND", "replacement": "SECOND" },
+  { "token": "TRD", "replacement": "THIRD" },
+  { "token": "3RD", "replacement": "THIRD" },
+  { "token": "4TH", "replacement": "FOURTH" },
+  { "token": "5TH", "replacement": "FIFTH" },
+  { "token": "6TH", "replacement": "SIXTH" },
+  { "token": "7TH", "replacement": "SEVENTH" },
+  { "token": "8TH", "replacement": "EIGHTH" },
+  { "token": "9TH", "replacement": "NINTH" },
+  { "token": "10TH", "replacement": "TENTH" },
+
+  { "token": "GOVT", "replacement": "GOVERNMENT" },
+
+  { "token": "GR", "replacement": "GREEN" },
+  { "token": "GRN", "replacement": "GREEN" },
+
+  { "token": "GT", "replacement": "GREAT" },
+
+  { "token": "GYM", "replacement": "GYMNASIUM" },
+
+  { "token": "HARBOR", "replacement": "HARBOUR" },
+
+  { "token": "HGT", "replacement": "HEIGHT" },
+  { "token": "HTS", "replacement": "HEIGHTS" },
+
+  { "token": "HSE", "replacement": "HOUSE" },
+
+  { "token": "HTL", "replacement": "HOTEL" },
+
+  { "token": "INC", "replacement": "INCORPORATED" },
+
+  { "token": "INST", "replacement": "INSTITUTE" },
+
+  { "token": "LIB", "replacement": "LIBRARY" },
+
+  { "token": "LN", "replacement": "LANE" },
+
+  { "token": "LTD", "replacement": "LIMITED" },
+
+  { "token": "MDW", "replacement": "MEADOW" },
+
+  { "token": "MT", "replacement": "MOUNT" },
+  { "token": "MTN", "replacement": "MOUNTAIN" },
+
+  { "token": "MUS", "replacement": "MUSEUM" },
+
+  { "token": "MW", "replacement": "MEWS" },
+
+  { "token": "OFC", "replacement": "OFFICE" },
+  { "token": "OFCS", "replacement": "OFFICES" },
+
+  { "token": "ORCH", "replacement": "ORCHARD" },
+
+  { "token": "ORG", "replacement": "ORGANISATION" },
+
+  { "token": "PASS", "replacement": "PASSAGE" },
+  { "token": "PSGR", "replacement": "PASSAGE" },
+
+  { "token": "PEN", "replacement": "PENINSULA" },
+
+  { "token": "PK", "replacement": "PARK" },
+
+  { "token": "PL", "replacement": "PLACE" },
+
+  { "token": "PLZA", "replacement": "PLAZA" },
+
+  { "token": "PROM", "replacement": "PROMENADE" },
+
+  { "token": "PT", "replacement": "POINT" },
+
+  { "token": "RD", "replacement": "ROAD" },
+
+  { "token": "RR", "replacement": "REAR" },
+  { "token": "R-O", "replacement": "REAR OF" },
+
+  { "token": "RDG", "replacement": "RIDGE" },
+
+  { "token": "RVR", "replacement": "RIVER" },
+
+  { "token": "SCH", "replacement": "SCHOOL" },
+
+  { "token": "SEC", "replacement": "SECTION" },
+  { "token": "SECT", "replacement": "SECTION" },
+
+  { "token": "SF", "replacement": "SECOND FLOOR" },
+
+  { "token": "SOC", "replacement": "SOCIETY" },
+
+  { "token": "SQ", "replacement": "SQUARE" },
+  { "token": "SQRE", "replacement": "SQUARE" },
+
+  { "token": "STUD", "replacement": "STUDIO" },
+
+  { "token": "STE", "replacement": "SUITE" },
+
+  { "token": "STN", "replacement": "STATION" },
+
+  { "token": "TAV", "replacement": "TAVERN" },
+
+  { "token": "TER", "replacement": "TERRACE" },
+  { "token": "TERR", "replacement": "TERRACE" },
+
+  { "token": "TF", "replacement": "TOP FLOOR" },
+
+  { "token": "THEA", "replacement": "THEATRE" },
+  { "token": "THEATER", "replacement": "THEATRE" },
+
+  { "token": "TOWNHALL", "replacement": "TOWN HALL" },
+
+  { "token": "TOWNHSE", "replacement": "TOWNHOUSE" },
+
+  { "token": "UNIV", "replacement": "UNIVERSITY" },
+
+  { "token": "VAL", "replacement": "VALLEY" },
+
+  { "token": "VIAD", "replacement": "VIADUCT" },
+
+  { "token": "WATR", "replacement": "WATERS" },
+
+  { "token": "WD", "replacement": "WOOD" },
+
+  { "token": "WG", "replacement": "WING" },
+
+  { "token": "WHOUSE", "replacement": "WAREHOUSE" },
+
+  { "token": "WKS", "replacement": "WORKS" },
+
+  { "token": "WY", "replacement": "WAY" }
+]

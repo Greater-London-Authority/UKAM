@@ -1,0 +1,90 @@
+site_name: uk_address_matcher
+site_url: https://moj-analytical-services.github.io/uk_address_matcher/
+repo_url: https://github.com/moj-analytical-services/uk_address_matcher
+docs_dir: docs/site
+
+theme:
+  name: material
+  logo: assets/images/icon.png
+  favicon: assets/images/icon.png
+  features:
+    - content.code.annotate
+    - content.code.copy
+    - navigation.footer
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - toc.follow
+  palette:
+    - scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/toggle-switch
+        name: Switch to dark mode
+    - scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/toggle-switch-off-outline
+        name: Switch to light mode
+
+plugins:
+  - search
+  - charts
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          options:
+            show_source: false
+            show_root_heading: true
+            show_root_full_path: false
+            heading_level: 3
+            members_order: source
+            allow_inspection: true
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: vegalite
+          class: vegalite
+          format: !!python/name:mkdocs_charts_plugin.fences.fence_vegalite
+        - name: python
+          class: python
+          validator: !!python/name:markdown_exec.validator
+          format: !!python/name:markdown_exec.formatter
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+  - attr_list
+  - tables
+  - footnotes
+
+extra:
+  analytics:
+    provider: google
+    property: G-L6JT8NK528
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - https://cdn.jsdelivr.net/npm/vega@5
+  - https://cdn.jsdelivr.net/npm/vega-lite@5
+  - https://cdn.jsdelivr.net/npm/vega-embed@6
+
+exclude_docs: |
+  adr/
+
+nav:
+  - Overview: index.md
+  - Getting started: get_started.md
+  - Choosing a matching threshold: choosing_a_matching_threshold.md
+  - Optimising accuracy: optimising_accuracy.md
+  - Working with Ordnance Survey data: ordnance_survey.md
+  - Performance and benchmarking: performance.md
+  - API reference: api_reference.md

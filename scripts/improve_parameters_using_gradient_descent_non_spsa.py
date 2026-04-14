@@ -1,23 +1,21 @@
-import numpy as np
+import json
+import logging
 import os
-import pandas as pd
+from datetime import datetime
+
 import altair as alt
-from IPython.display import display, clear_output
 import duckdb
+import numpy as np
+import pandas as pd
+
 from uk_address_matcher import (
-    clean_data_using_precomputed_rel_tok_freq,
+    prepare_data_for_matching,
     get_linker,
-    best_matches_with_distinguishability,
 )
+from uk_address_matcher.linking_model.training import get_settings_for_training
 from uk_address_matcher.post_linkage.identify_distinguishing_tokens import (
     improve_predictions_using_distinguishing_tokens,
 )
-from uk_address_matcher.linking_model.training import get_settings_for_training
-
-import logging
-import json
-
-from datetime import datetime
 
 #  We will clean the data once and store it
 if os.path.exists("del.duckdb"):
@@ -202,9 +200,7 @@ print(f"messy_count: {messy_count:,}, canonical_count: {canonical_count:,}")
 # Step 2: Clean data
 # -----------------------------------------------------------------------------
 
-df_messy_data_clean = clean_data_using_precomputed_rel_tok_freq(
-    messy_data, con=con_disk
-)
+df_messy_data_clean = prepare_data_for_matching(messy_data, con=con_disk)
 sql = """
 create table messy_data_clean as
 select * exclude (labels_filename) from df_messy_data_clean
@@ -212,7 +208,7 @@ select * exclude (labels_filename) from df_messy_data_clean
 con_disk.execute(sql)
 
 
-df_os_clean = clean_data_using_precomputed_rel_tok_freq(df_os, con=con_disk)
+df_os_clean = prepare_data_for_matching(con_disk.from_df(df_os), con=con_disk)
 sql = """
 create table os_clean as
 select * from df_os_clean
@@ -375,9 +371,7 @@ def black_box(
 
     start_time = datetime.now()
 
-    df_predict = linker.inference.predict(
-        threshold_match_weight=-20, experimental_optimisation=True
-    )
+    df_predict = linker.inference.predict(threshold_match_weight=-20)
     df_predict_ddb = df_predict.as_duckdbpyrelation()
 
     end_time = datetime.now()

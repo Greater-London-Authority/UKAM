@@ -1,0 +1,4 @@
+/* Hide the first H1 on the homepage only */
+html:has(.md-header__button.md-logo[href="."]) .md-content__inner > h1:first-of-type {
+  display: none;
+}

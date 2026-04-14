@@ -1,0 +1,144 @@
+name: Bug report
+description: Report a defect in matching, canonical preparation, or documented behaviour
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem.
+
+        Please keep examples minimal and do not include real personal or sensitive address data. Sanitised sample rows, short code snippets, and tracebacks are the most useful.
+
+        Before filing, please check the README and docs:
+        - https://github.com/moj-analytical-services/uk_address_matcher/blob/main/readme.md
+        - https://moj-analytical-services.github.io/uk_address_matcher/
+
+  - type: textarea
+    attributes:
+      label: What happened?
+      description: Describe the bug clearly and concisely.
+      placeholder: The matcher returned no matches for addresses that should match exactly...
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: What did you expect to happen?
+      description: Describe the behaviour you expected instead.
+      placeholder: I expected these rows to resolve to the known canonical records...
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: How can we reproduce it?
+      description: Provide minimal steps, commands, and code to reproduce the issue.
+      placeholder: |
+        1. Install the package with ...
+        2. Load the attached sanitised sample data ...
+        3. Run this code ...
+        4. Observe the failure ...
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Minimal data sample
+      description: If relevant, include a few sanitised example rows for messy and canonical data, including column names.
+      placeholder: |
+        messy:
+        unique_id,address_concat,postcode
+        m_1,"Flat A Example Court, 10 Demo Road, Townton",AB1 2BC
+
+        canonical:
+        unique_id,address_concat,postcode
+        c_1,"Flat A, 10 Demo Road, Townton",AB1 2BC
+      render: text
+
+  - type: dropdown
+    attributes:
+      label: Which workflow were you using?
+      description: Pick the closest option.
+      options:
+        - Matching against an in-memory or file-backed canonical dataset
+        - Matching against a preprocessed canonical folder
+        - Running prepare_canonical_folder or similar preprocessing
+        - Following an example from the README or docs
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Input schema and setup
+      description: Tell us about your inputs and configuration.
+      placeholder: |
+        messy columns: unique_id, address_concat, postcode
+        canonical columns: unique_id, address_concat, postcode
+        labelled data present: yes/no
+        stages passed to AddressMatcher: default/custom
+        threshold changes: none/custom values
+      render: text
+
+  - type: textarea
+    attributes:
+      label: Error output or unexpected result
+      description: Paste the traceback, assertion failure, or a small sample of the unexpected output.
+      render: text
+
+  - type: markdown
+    attributes:
+      value: "## Environment"
+
+  - type: input
+    attributes:
+      label: uk_address_matcher version
+      placeholder: e.g. 0.9.0
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: Python version
+      placeholder: e.g. 3.11.11
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: DuckDB version
+      placeholder: e.g. 1.3.2
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: Operating system
+      placeholder: e.g. macOS 15.3, Ubuntu 24.04
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: Installation method
+      placeholder: e.g. pip install uk_address_matcher, uv add uk_address_matcher
+
+  - type: markdown
+    attributes:
+      value: "## Before submitting"
+
+  - type: checkboxes
+    attributes:
+      label: Please confirm the following
+      options:
+        - label: I have checked the README or docs for the expected workflow and input columns.
+          required: true
+        - label: I have tried to reproduce this on the latest released version, or on main if I suspect it may already be fixed.
+          required: true
+        - label: I have included a minimal reproducible example or explained why I could not provide one.
+          required: true
+        - label: I have removed or sanitised any personal or sensitive address data.
+          required: true

@@ -1,370 +1,273 @@
 #!/usr/bin/env python3
 """
-Canonical Data Processing Pipeline
-Processes raw OS Addressbase data and generates:
-  - Cleaned canonical addresses
-  - Address token frequencies
-  - Numeric token frequencies
+Canonical Data Processing Pipeline (AWS ECS).
+
+Loads raw OS Addressbase data from S3, runs the full UKAM preparation
+pipeline (cleaning, tokenisation, inverted index) via
+`prepare_canonical_folder`, and uploads the prepared artefacts back to S3
+so that subsequent messy-matching jobs can skip re-processing.
+
+Environment variables
+---------------------
+Required:
+  CANONICAL_RAW_S3_KEY  S3 key for the raw OS parquet.
+
+Optional:
+  S3_BUCKET             Default: gla-address-matcher-data
+  AWS_DEFAULT_REGION    Default: eu-west-2
+  PROCESSING_ID         Auto-generated if not set.
+  VERSION_TAG           Default: YYYY_MM of today.
+  DUCKDB_MEMORY_LIMIT   Default: 24GB.
+  DUCKDB_TEMP_DIR_SIZE  Default: 100GB.
+
+S3 output layout
+----------------
+  canonical/prepared/{VERSION_TAG}/   — versioned prepared artefacts
+  canonical/prepared/latest/          — copy of most-recent run
+  canonical/raw/latest_metadata.json  — pointer to latest run
 """
 
-import os
-import sys
 import json
+import logging
+import multiprocessing
+import os
+import shutil
+import sys
 import time
+from datetime import datetime
+from pathlib import Path
+
 import boto3
 import duckdb
-from datetime import datetime
-from uk_address_matcher import (
-    get_numeric_term_frequencies_from_address_table,
-    clean_data_using_precomputed_rel_tok_freq
+
+from uk_address_matcher import prepare_canonical_folder
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s %(message)s",
+    datefmt="%H:%M:%S",
 )
+log = logging.getLogger("process_canonical")
+
+_LOCAL_PREPARED_DIR = "/tmp/ukam_canonical"
+_PREPARED_S3_PREFIX = "canonical/prepared"
+
+# Filenames created by prepare_canonical_folder
+_PREPARED_FILES = [
+    "ukam_canonical_addresses.parquet",
+    "ukam_term_frequencies.parquet",
+    "ukam_inverted_index.parquet",
+    "ukam_manifest.json",
+]
+# The chunks directory (used when canonical is large)
+_CHUNKS_DIR = "ukam_canonical_addresses_chunks"
 
 
 class CanonicalProcessor:
-    def __init__(self):
-        self.s3_bucket = os.environ.get(
-            'S3_BUCKET', 'gla-address-matcher-data')
-        self.aws_region = os.environ.get('AWS_DEFAULT_REGION', 'eu-west-2')
+    def __init__(self) -> None:
+        self.s3_bucket = os.environ.get("S3_BUCKET", "gla-address-matcher-data")
+        self.aws_region = os.environ.get("AWS_DEFAULT_REGION", "eu-west-2")
         self.processing_id = os.environ.get(
-            'PROCESSING_ID', f"proc-{int(time.time())}")
-
-        # Input/output S3 keys
-        self.raw_s3_key = os.environ.get('CANONICAL_RAW_S3_KEY')  # Input
+            "PROCESSING_ID", f"proc-{int(time.time())}"
+        )
+        self.raw_s3_key = os.environ.get("CANONICAL_RAW_S3_KEY")
         self.version_tag = os.environ.get(
-            'VERSION_TAG', datetime.now().strftime('%Y_%m'))
+            "VERSION_TAG", datetime.now().strftime("%Y_%m")
+        )
 
-        self.s3 = boto3.client('s3', region_name=self.aws_region)
+        if not self.raw_s3_key:
+            raise ValueError("CANONICAL_RAW_S3_KEY environment variable is required")
+
+        self.s3 = boto3.client("s3", region_name=self.aws_region)
         self.con = self._setup_duckdb()
 
-    def _setup_duckdb(self):
-        """Setup DuckDB with S3 support"""
-        con = duckdb.connect(':memory:')
-        import multiprocessing
+    # ------------------------------------------------------------------
+    # DuckDB setup
+    # ------------------------------------------------------------------
+    def _setup_duckdb(self) -> duckdb.DuckDBPyConnection:
+        con = duckdb.connect(":memory:")
 
-        # Memory configuration
-        memory_limit = os.environ.get('DUCKDB_MEMORY_LIMIT', '24GB')
+        memory_limit = os.environ.get("DUCKDB_MEMORY_LIMIT", "24GB")
         con.execute(f"PRAGMA memory_limit='{memory_limit}'")
-        # Thread configuration - use all available cores
+
         thread_count = multiprocessing.cpu_count()
         con.execute(f"PRAGMA threads={thread_count}")
 
-        #  NEW: Set temporary directory size limit
-        temp_dir_size = os.environ.get('DUCKDB_TEMP_DIR_SIZE', '100GB')
+        temp_dir_size = os.environ.get("DUCKDB_TEMP_DIR_SIZE", "100GB")
         con.execute(f"PRAGMA max_temp_directory_size='{temp_dir_size}'")
-
-        #  NEW: Set temporary directory location
         con.execute("SET temp_directory='/tmp/duckdb'")
 
-        print("  DuckDB configured:")
-        print(f"   Memory limit: {memory_limit}")
-        print(f"   Threads: {thread_count}")
-        print(f"   Temp dir size: {temp_dir_size}")
+        log.info("DuckDB: %s memory, %d threads", memory_limit, thread_count)
 
-        # S3 configuration
         con.execute("INSTALL httpfs")
         con.execute("LOAD httpfs")
 
-        # Get AWS credentials from boto3 session (respects ECS task role)
         try:
             session = boto3.Session()
-            credentials = session.get_credentials()
-            current_creds = credentials.get_frozen_credentials()
-
-            # Configure DuckDB S3 settings
+            creds = session.get_credentials().get_frozen_credentials()
             con.execute(f"SET s3_region='{self.aws_region}'")
-            con.execute(f"SET s3_access_key_id='{current_creds.access_key}'")
-            con.execute(
-                f"SET s3_secret_access_key='{current_creds.secret_key}'")
-
-            # Session token is REQUIRED for temporary credentials
-            # (ECS task role)
-            if current_creds.token:
-                con.execute(f"SET s3_session_token='{current_creds.token}'")
-
+            con.execute(f"SET s3_access_key_id='{creds.access_key}'")
+            con.execute(f"SET s3_secret_access_key='{creds.secret_key}'")
+            if creds.token:
+                con.execute(f"SET s3_session_token='{creds.token}'")
             con.execute("SET s3_use_ssl=true")
-
-            print(
-                f"DuckDB configured: {memory_limit} memory, "
-                f"AWS auth via task role")
-
-        except Exception as e:
-            print(f"⚠️  Warning: Could not configure AWS credentials: {e}")
-            print("    Attempting to use default S3 configuration...")
+            log.info("AWS credentials configured via task role")
+        except Exception as exc:
+            log.warning("Could not configure AWS credentials: %s", exc)
             con.execute(f"SET s3_region='{self.aws_region}'")
 
         return con
 
-    def process(self):
-        """Main processing pipeline"""
-        print(f"   Starting Canonical Processing: {self.processing_id}")
-        print(f"   Version: {self.version_tag}")
-        print(f"   Input: s3://{self.s3_bucket}/{self.raw_s3_key}")
-
-        start_time = time.time()
+    # ------------------------------------------------------------------
+    # Main pipeline
+    # ------------------------------------------------------------------
+    def process(self) -> dict:
+        log.info("Canonical processing: %s  (version: %s)", self.processing_id, self.version_tag)
+        log.info("Input: s3://%s/%s", self.s3_bucket, self.raw_s3_key)
+        t_start = time.time()
 
         try:
-            # Step 1: Load raw OS data
-            print("\n   Loading raw canonical data from S3...")
-            load_start = time.time()
-
+            # ----------------------------------------------------------------
+            # Step 1: Load raw canonical from S3
+            # ----------------------------------------------------------------
+            log.info("Loading raw canonical data from S3...")
+            t_load = time.time()
             self.con.execute(f"""
-            CREATE OR REPLACE TABLE canonical_raw AS
-            SELECT
-                uprn as unique_id,
-                fulladdress_cleaned as address_concat,
-                postcode,
-                'canonical' as source_dataset
-            FROM read_parquet('s3://{self.s3_bucket}/{self.raw_s3_key}')
-            WHERE fulladdress_cleaned IS NOT NULL AND postcode IS NOT NULL
+                CREATE OR REPLACE TABLE canonical_raw AS
+                SELECT
+                    CAST(uprn AS VARCHAR)     AS unique_id,
+                    fulladdress_cleaned       AS address_concat,
+                    postcode
+                FROM read_parquet('s3://{self.s3_bucket}/{self.raw_s3_key}')
+                WHERE fulladdress_cleaned IS NOT NULL
+                  AND postcode IS NOT NULL
             """)
-
-            df_canonical_raw = self.con.table("canonical_raw")
             raw_count = self.con.execute(
-                "SELECT COUNT(*) FROM canonical_raw").fetchone()[0]
-            load_time = time.time() - load_start
+                "SELECT COUNT(*) FROM canonical_raw"
+            ).fetchone()[0]
+            log.info("Loaded %d rows in %.1fs", raw_count, time.time() - t_load)
 
-            print(f"   Loaded {raw_count:,} canonical"
-                  f" addresses in {load_time:.2f}s")
+            # ----------------------------------------------------------------
+            # Step 2: Prepare canonical artefacts
+            # ----------------------------------------------------------------
+            # Clean up any previous run's tmp dir
+            if Path(_LOCAL_PREPARED_DIR).exists():
+                shutil.rmtree(_LOCAL_PREPARED_DIR)
 
-            # Step 2: Load existing token frequencies from S3
-            print("\n   Loading existing token frequencies from S3...")
-            token_start = time.time()
-            token_freq_source_key = (
-                "canonical/metadata/address_token_frequencies.parquet")
-            df_token_freq = self.con.read_parquet(
-                f's3://{self.s3_bucket}/{token_freq_source_key}')
-            token_count = self.con.execute(
-                "SELECT COUNT(*) FROM df_token_freq").fetchone()[0]
-            token_time = time.time() - token_start
-            print(f"   Loaded {token_count:,} token frequencies from"
-                  f" existing file in {token_time:.2f}s")
-
-            # Step 3: Load existing numeric frequencies
-            # (or generate if missing)
-            print("\n🔢 Loading existing numeric frequencies from S3...")
-            numeric_start = time.time()
-            # Track whether we generated or loaded
-            numeric_freq_generated = False
-            try:
-                numeric_freq_source_key = (
-                    "canonical/metadata/numeric_token_frequencies.parquet")
-                df_numeric_freq = self.con.read_parquet(
-                    f's3://{self.s3_bucket}/{numeric_freq_source_key}')
-                numeric_count = self.con.execute(
-                    "SELECT COUNT(*) FROM df_numeric_freq").fetchone()[0]
-                numeric_time = time.time() - numeric_start
-                print(f"   Loaded {numeric_count:,} numeric frequencies from"
-                      f" existing file in {numeric_time:.2f}s")
-            except Exception as e:  # noqa: F841
-                print("   No existing numeric frequencies found, "
-                      "will generate from raw data")
-                numeric_freq_generated = True
-                # Generate numeric frequencies (this doesn't need flat_letter)
-                df_numeric_freq = get_numeric_term_frequencies_from_address_table(  # noqa: F841,E501
-                    df_canonical_raw, self.con
-                )
-                numeric_count = self.con.execute(
-                    "SELECT COUNT(*) FROM df_numeric_freq").fetchone()[0]
-                numeric_time = time.time() - numeric_start
-                print(f"   Generated {numeric_count:,} numeric"
-                      f" frequencies in {numeric_time:.2f}s")
-
-            # Step 4: Clean canonical data using existing token frequencies
-            print("\n   Cleaning canonical addresses using"
-                  " precomputed token frequencies...")
-            clean_start = time.time()
-
-            # Use clean_data_using_precomputed_rel_tok_freq
-            # with the loaded frequencies
-            df_canonical_clean = clean_data_using_precomputed_rel_tok_freq(   # noqa: F841,E501
-                df_canonical_raw,
+            log.info("Running prepare_canonical_folder -> %s", _LOCAL_PREPARED_DIR)
+            t_prepare = time.time()
+            prepare_canonical_folder(
+                self.con.table("canonical_raw"),
+                output_folder=_LOCAL_PREPARED_DIR,
                 con=self.con,
-                rel_tok_freq_table=df_token_freq
-            )  # Use frequencies loaded from S3!
+                overwrite=True,
+            )
+            prepare_time = time.time() - t_prepare
+            log.info("Canonical prepared in %.1fs", prepare_time)
 
-            clean_time = time.time() - clean_start
-            print(f"✅ Cleaned canonical data in {clean_time:.2f}s")
+            # ----------------------------------------------------------------
+            # Step 3: Upload prepared artefacts to S3
+            # ----------------------------------------------------------------
+            log.info("Uploading prepared artefacts to S3...")
+            t_upload = time.time()
+            versioned_prefix = f"{_PREPARED_S3_PREFIX}/{self.version_tag}"
+            latest_prefix = f"{_PREPARED_S3_PREFIX}/latest"
 
-            # Step 5: Export cleaned canonical to S3
-            print("\n💾 Exporting cleaned canonical data...")
-            export_start = time.time()
+            prepared_dir = Path(_LOCAL_PREPARED_DIR)
+            uploaded: list[str] = []
 
-            canonical_output_key = (
-                f"canonical/processed/"
-                f"canonical_clean_{self.version_tag}.parquet")
-            self.con.execute(f"""
-            COPY df_canonical_clean
-            TO 's3://{self.s3_bucket}/{canonical_output_key}'
-            (FORMAT PARQUET, COMPRESSION SNAPPY, ROW_GROUP_SIZE 100000)
-            """)
+            for fname in _PREPARED_FILES:
+                local_path = prepared_dir / fname
+                if local_path.exists():
+                    for prefix in (versioned_prefix, latest_prefix):
+                        s3_key = f"{prefix}/{fname}"
+                        self.s3.upload_file(str(local_path), self.s3_bucket, s3_key)
+                        log.info("  Uploaded %s", s3_key)
+                    uploaded.append(fname)
 
-            # Also save as "latest"
-            canonical_latest_key = "canonical/processed/latest.parquet"
-            self._copy_s3_object(canonical_output_key, canonical_latest_key)
+            # Upload chunks directory if it exists (large canonical)
+            chunks_local = prepared_dir / _CHUNKS_DIR
+            if chunks_local.exists():
+                for chunk_file in sorted(chunks_local.iterdir()):
+                    for prefix in (versioned_prefix, latest_prefix):
+                        s3_key = f"{prefix}/{_CHUNKS_DIR}/{chunk_file.name}"
+                        self.s3.upload_file(str(chunk_file), self.s3_bucket, s3_key)
+                uploaded.append(_CHUNKS_DIR)
 
-            # Step 6: Copy token frequencies to versioned location
-            print("   Copying token frequencies to versioned location...")
+            log.info("Uploaded %d artefacts in %.1fs", len(uploaded), time.time() - t_upload)
 
-            token_freq_key = (
-                f"canonical/metadata/"
-                f"address_token_frequencies_{self.version_tag}.parquet")
-            self._copy_s3_object(token_freq_source_key, token_freq_key)
-
-            token_freq_latest_key = (
-                "canonical/metadata/"
-                "address_token_frequencies_latest.parquet")
-            self._copy_s3_object(token_freq_source_key, token_freq_latest_key)
-
-            # Step 7: Export or copy numeric frequencies
-            print("💾 Saving numeric frequencies...")
-
-            numeric_freq_key = (
-                f"canonical/metadata/"
-                f"numeric_token_frequencies_{self.version_tag}.parquet")
-
-            #  Fixed logic: use flag to decide
-            if numeric_freq_generated:
-                # We generated it, so export it to S3
-                self.con.execute(f"""
-                COPY df_numeric_freq
-                TO 's3://{self.s3_bucket}/{numeric_freq_key}'
-                (FORMAT PARQUET, COMPRESSION SNAPPY)
-                """)
-                print("   Exported generated numeric frequencies")
-            else:
-                # We loaded it from S3, so copy it to versioned location
-                self._copy_s3_object(numeric_freq_source_key, numeric_freq_key)
-                print("   Copied existing numeric frequencies")
-
-            numeric_freq_latest_key = (
-                "canonical/metadata/"
-                "numeric_token_frequencies_latest.parquet")
-            self._copy_s3_object(numeric_freq_key, numeric_freq_latest_key)
-
-            export_time = time.time() - export_start
-            total_time = time.time() - start_time
-
-            # Step 8: Save processing metadata
+            # ----------------------------------------------------------------
+            # Step 4: Save metadata
+            # ----------------------------------------------------------------
+            total_time = time.time() - t_start
             metadata = {
-                'processing_id': self.processing_id,
-                'version_tag': self.version_tag,
-                'timestamp': datetime.now().isoformat(),
-                'status': 'success',
-                'statistics': {
-                    'raw_addresses': raw_count,
-                    'unique_tokens': token_count,
-                    'unique_numeric_tokens': numeric_count
+                "processing_id": self.processing_id,
+                "version_tag": self.version_tag,
+                "timestamp": datetime.now().isoformat(),
+                "status": "success",
+                "statistics": {"raw_addresses": raw_count},
+                "timing": {
+                    "load_s": round(time.time() - t_load, 2),
+                    "prepare_s": round(prepare_time, 2),
+                    "total_s": round(total_time, 2),
                 },
-                'timing': {
-                    'load_time': round(load_time, 2),
-                    'token_freq_load_time': round(token_time, 2),
-                    'numeric_freq_time': round(numeric_time, 2),
-                    'clean_time': round(clean_time, 2),
-                    'export_time': round(export_time, 2),
-                    'total_time': round(total_time, 2)
-                },
-                'output_files': {
-                    'canonical_clean': canonical_output_key,
-                    'canonical_clean_latest': canonical_latest_key,
-                    'token_frequencies': token_freq_key,
-                    'numeric_frequencies': numeric_freq_key
-                }
+                "s3_prepared_prefix": f"s3://{self.s3_bucket}/{versioned_prefix}",
+                "s3_latest_prefix": f"s3://{self.s3_bucket}/{latest_prefix}",
             }
 
-            metadata_key = (
-                f"canonical/metadata/processing_history/"
-                f"{self.processing_id}.json")
+            history_key = (
+                f"canonical/metadata/processing_history/{self.processing_id}.json"
+            )
             self.s3.put_object(
                 Bucket=self.s3_bucket,
-                Key=metadata_key,
+                Key=history_key,
                 Body=json.dumps(metadata, indent=2),
-                ContentType='application/json'
+                ContentType="application/json",
             )
-
-            # Update latest metadata pointer
-            latest_metadata_key = "canonical/raw/latest_metadata.json"
             self.s3.put_object(
                 Bucket=self.s3_bucket,
-                Key=latest_metadata_key,
-                Body=json.dumps({
-                    'version_tag': self.version_tag,
-                    'processing_id': self.processing_id,
-                    'timestamp': datetime.now().isoformat(),
-                    'canonical_clean_s3_key': canonical_latest_key,
-                    'token_freq_s3_key': token_freq_latest_key,
-                    'numeric_freq_s3_key': numeric_freq_latest_key
-                }, indent=2),
-                ContentType='application/json'
+                Key="canonical/raw/latest_metadata.json",
+                Body=json.dumps(
+                    {
+                        "version_tag": self.version_tag,
+                        "processing_id": self.processing_id,
+                        "timestamp": datetime.now().isoformat(),
+                        "s3_prepared_prefix": f"s3://{self.s3_bucket}/{latest_prefix}",
+                    },
+                    indent=2,
+                ),
+                ContentType="application/json",
             )
 
-            # Print summary
-            print("\n" + "="*70)
-            print("   CANONICAL PROCESSING COMPLETED SUCCESSFULLY!")
-            print("="*70)
-            print("   Statistics:")
-            print(f"   Raw addresses       : {raw_count:,}")
-            print(f"   Unique tokens       : {token_count:,}")
-            print(f"   Numeric tokens      : {numeric_count:,}")
-            print("")
-            print("   Timing:")
-            print(f"   Load time           : {load_time:.2f}s")
-            print(f"   Token freq load     : {token_time:.2f}s")
-            print(f"   Numeric freq time   : {numeric_time:.2f}s")
-            print(f"   Clean time          : {clean_time:.2f}s")
-            print(f"   Export time         : {export_time:.2f}s")
-            print(f"   TOTAL TIME          : {total_time:.2f}s")
-            print("")
-            print("   Output files:")
-            print(f"   Canonical (versioned): s3://{self.s3_bucket}/"
-                  f"{canonical_output_key}")
-            print(f"   Canonical (latest)   : s3://{self.s3_bucket}/"
-                  f"{canonical_latest_key}")
-            print(f"   Token freq (latest)  : s3://{self.s3_bucket}/"
-                  f"{token_freq_latest_key}")
-            print(f"   Numeric freq (latest): s3://{self.s3_bucket}/"
-                  f"{numeric_freq_latest_key}")
-            print("="*70)
+            log.info("=" * 60)
+            log.info("CANONICAL PROCESSING COMPLETED in %.1fs", total_time)
+            log.info("  Raw rows   : %d", raw_count)
+            log.info("  Versioned  : s3://%s/%s/", self.s3_bucket, versioned_prefix)
+            log.info("  Latest     : s3://%s/%s/", self.s3_bucket, latest_prefix)
+            log.info("=" * 60)
 
             return metadata
 
-        except Exception as e:
-            print(f"   Canonical processing failed: {str(e)}")
-            import traceback
-            traceback.print_exc()
-
-            # Save error metadata
-            error_metadata = {
-                'processing_id': self.processing_id,
-                'version_tag': self.version_tag,
-                'timestamp': datetime.now().isoformat(),
-                'status': 'failed',
-                'error': str(e)
-            }
-
+        except Exception as exc:
+            log.exception("Canonical processing failed")
             try:
-                error_key = (
-                    f"results/canonical_processing/"
-                    f"{self.processing_id}/error.json")
                 self.s3.put_object(
                     Bucket=self.s3_bucket,
-                    Key=error_key,
-                    Body=json.dumps(error_metadata, indent=2),
-                    ContentType='application/json'
+                    Key=f"results/canonical_processing/{self.processing_id}/error.json",
+                    Body=json.dumps(
+                        {
+                            "processing_id": self.processing_id,
+                            "error": str(exc),
+                            "timestamp": datetime.now().isoformat(),
+                        },
+                        indent=2,
+                    ),
+                    ContentType="application/json",
                 )
-            except Exception as e:  # noqa: F841
-                print(f"   Error saving error metadata: {str(e)}")
-
+            except Exception:
+                pass
             sys.exit(1)
-
-    def _copy_s3_object(self, source_key, dest_key):
-        """Copy S3 object to create 'latest' version"""
-        self.s3.copy_object(
-            Bucket=self.s3_bucket,
-            CopySource={'Bucket': self.s3_bucket, 'Key': source_key},
-            Key=dest_key
-        )
 
 
 if __name__ == "__main__":
-    processor = CanonicalProcessor()
-    processor.process()
+    CanonicalProcessor().process()

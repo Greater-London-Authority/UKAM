@@ -1,0 +1,56 @@
+# docker-compose.yml — GLAAM local Jupyter development
+#
+# Usage
+# -----
+#   docker compose up --build jupyter
+#
+# Then open http://localhost:8888  (token: ukam)
+#
+# Data mounts
+# -----------
+#   Place OS NGD ZIPs in:   <repo>/../data/ngd/
+#   Place LDC CSV in:       <repo>/../data/ldc/
+#
+#   Both folders are mounted read-only into the container at /app/../data/
+#   (i.e. ../data/ relative to the notebooks, which is /data/ in the container).
+#
+# Memory
+# ------
+#   DUCKDB_MEMORY_LIMIT defaults to empty (auto = 90% of container RAM).
+#   Override with:  DUCKDB_MEMORY_LIMIT=12GB docker compose up jupyter
+#
+# Performance note (Windows)
+# --------------------------
+#   Running inside Docker on WSL2 gives 15–30% faster DuckDB execution
+#   vs native Windows Python due to better memory management and I/O.
+#   See README-Docker.md for WSL2 setup instructions.
+
+services:
+  jupyter:
+    build:
+      context: .
+      target: jupyter
+    image: ukam-jupyter
+    container_name: ukam-jupyter
+    ports:
+      - "8888:8888"
+    volumes:
+      # Mount data folder read-only at /data so notebooks reach it via ../data/
+      # (notebooks live at /app, so ../data → /data)
+      - ../data:/data:ro
+      # Mount repo read-write so notebook edits and outputs persist on the host
+      - .:/app:rw
+    environment:
+      # Override DuckDB memory if needed (leave empty for auto-detection)
+      - DUCKDB_MEMORY_LIMIT=${DUCKDB_MEMORY_LIMIT:-}
+      - JUPYTER_TOKEN=ukam
+    # Allow DuckDB to use up to 75% of available system RAM inside container
+    shm_size: "2gb"
+    # Restart policy for development convenience
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/api"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

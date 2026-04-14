@@ -53,3 +53,53 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
 
 # Entry point
 CMD ["uv", "run", "python", "container_main.py"]
+
+# =============================================================================
+# Jupyter stage — for local notebook development
+# Build: docker build --target jupyter -t ukam-jupyter .
+# Run:   see docker-compose.yml
+# =============================================================================
+FROM python:3.10-slim AS jupyter
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    git \
+    ca-certificates \
+    libgeos-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN pip install uv
+
+COPY pyproject.toml uv.lock ./
+
+# Install main deps + notebooks extras (jupyterlab, thefuzz, geopandas, numpy)
+RUN uv sync --frozen --no-dev
+RUN uv pip install jupyterlab ipykernel thefuzz numpy psutil
+
+COPY uk_address_matcher/ ./uk_address_matcher/
+COPY glaam_matching.ipynb ./
+COPY etl_addresses.ipynb ./
+
+# Create temp dirs and non-root user
+RUN useradd -m -u 1000 matcher && \
+    mkdir -p /tmp/duckdb /data && \
+    chown -R matcher:matcher /app /tmp/duckdb /data
+
+USER matcher
+
+ENV DUCKDB_MEMORY_LIMIT="" \
+    JUPYTER_TOKEN=ukam
+
+EXPOSE 8888
+
+CMD ["uv", "run", "jupyter", "lab", \
+     "--ip=0.0.0.0", \
+     "--port=8888", \
+     "--no-browser", \
+     "--notebook-dir=/app"]

@@ -83,8 +83,6 @@ RUN uv sync --frozen --no-dev
 RUN uv pip install jupyterlab ipykernel thefuzz numpy psutil
 
 COPY uk_address_matcher/ ./uk_address_matcher/
-COPY glaam_matching.ipynb ./
-COPY etl_addresses.ipynb ./
 
 # Create temp dirs and non-root user
 RUN useradd -m -u 1000 matcher && \
@@ -98,8 +96,4 @@ ENV DUCKDB_MEMORY_LIMIT="" \
 
 EXPOSE 8888
 
-CMD ["uv", "run", "jupyter", "lab", \
-     "--ip=0.0.0.0", \
-     "--port=8888", \
-     "--no-browser", \
-     "--notebook-dir=/app"]
+CMD ["/bin/sh", "-c", "uv sync --frozen --no-dev --group notebooks && uv run jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --notebook-dir=/app"]
